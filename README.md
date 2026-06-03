@@ -192,7 +192,7 @@ La función también intenta corregir el nombre usando MRZ como referencia cuand
 | Patrón de nombre MRZ | Permite capturas más amplias en componentes del nombre. | Limita componentes a rangos de longitud para evitar capturar texto externo al MRZ. |
 | Objetivo principal | Mayor contexto textual y mejor precisión promedio. | Mejor velocidad en procesamiento por lotes, aceptando pérdida de precisión en algunos campos. |
 
-## Resultado
+## Resultado (En dispositivo no optimizado)
 
 ### Velocidad
 
