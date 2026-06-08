@@ -74,8 +74,7 @@ como *fallback* automático si la pasada principal no recupera los campos críti
 
 ## Instalación
 
-Requiere Python 3.11 y el binario de **Tesseract OCR** instalado en el sistema
-(Windows: <https://github.com/UB-Mannheim/tesseract/wiki>; se usa para el MRZ del reverso).
+Requiere Python 3.11 y el binario de **Tesseract OCR** instalado en el sistema.
 
 ```bash
 python -m venv venv
@@ -187,12 +186,6 @@ en un dispositivo **no optimizado** (CPU, modelo en caliente).
 | Número documento |  94% | 92% |**92%** |
 | Fecha nacimiento |  98% | 92% |**92%** |
 | Sexo             | 100% | 95% |**95%** |
-
-**Lectura:** la **v2** sacrificó precisión por velocidad frente a la OG. La **v3** recupera
-y supera a la OG en el frente, con grandes saltos en los campos antes débiles
-(sección 50→96, CP 54→96, clave 2→26, nombre 66→78), y mantiene el reverso competitivo
-y rápido, todo a una velocidad similar a la v2. Es decir: **la precisión de la OG y la
-velocidad de la v2, simultáneamente.**
 
 ## Evolución de decisiones de diseño (OG → v2 → v3)
 
