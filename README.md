@@ -1,227 +1,227 @@
-# OCR Avanzado Versión "2.0"
+# OCR Avanzado versión "3.0" (con PP-OCRv5)
 
-`ocr_avanzado_v2.py` es un módulo de OCR para extraer información de credenciales INE mexicanas a partir de imágenes del frente, reverso o ambos lados. Está diseñado para correr en CPU, sin depender de GPU, y combina preprocesamiento con OpenCV, OCR por zonas, PaddleOCR, Tesseract y validación cruzada entre frente y reverso.
+![versión](https://img.shields.io/badge/versión-3.0-blue)
+![Python](https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white)
+![PaddleOCR](https://img.shields.io/badge/PaddleOCR-3.6.0-0098FF)
+![PaddlePaddle](https://img.shields.io/badge/PaddlePaddle-3.0.0-0062B0)
+![modelo](https://img.shields.io/badge/modelo-PP--OCRv5-success)
+![Tesseract](https://img.shields.io/badge/Tesseract-5.5-4B8BBE)
+![precisión frente](https://img.shields.io/badge/precisión%20frente-85%25-brightgreen)
+![CPU](https://img.shields.io/badge/CPU-only%20(sin%20GPU)-lightgrey)
+![plataforma](https://img.shields.io/badge/plataforma-Windows%20%7C%20Linux%20%7C%20macOS-informational)
+![privacidad](https://img.shields.io/badge/privacidad-100%25%20local-success)
 
-La versión v2 está enfocada en reducir tiempos de procesamiento en lotes, especialmente cuando se procesan muchas INEs. Para lograrlo, cambia la estrategia del flujo original, prioriza zonas específicas de la credencial y usa OCR completo solo cuando los campos críticos no se pueden extraer con suficiente confianza.
+Extracción automática de datos de credenciales INE/IFE mexicanas (frente y reverso),
+con motor **PP-OCRv5** (PaddleOCR 3.x), arquitectura modular y validación cruzada
+frente/reverso. Optimizado para CPU (sin GPU).
 
-## Características principales
+> **Novedad v3.0:** migración a **PP-OCRv5** con reconocedor latino dedicado, estrategia
+> de OCR de imagen completa en una sola pasada, y reescritura modular del proyecto.
+> Precisión promedio del frente **61% → 85%** frente a la v2.
 
-- Extracción de datos del frente de la INE.
-- Extracción de datos del reverso, principalmente MRZ, CIC y OCR vertical.
-- Detección automática de frente o reverso con `extraer_datos_ine(img, tipo="auto")`.
-- Validación cruzada entre frente y reverso con `validar_cruzado_ine`.
-- Corrección parcial de errores comunes de OCR en CURP y nombres.
-- OCR por zonas para acelerar el procesamiento.
-- Fallbacks inteligentes a OCR completo cuando las zonas no son suficientes.
-- Procesamiento MRZ optimizado con Tesseract antes de usar PaddleOCR.
-- Compatibilidad con API legacy mediante funciones como `ocr_combinado`, `extraer_curp`, `extraer_clave_elector`, `extraer_fecha_nacimiento`, `extraer_sexo`, `extraer_mrz`, `extraer_nombre_completo` y `extraer_domicilio`.
-- Compatibilidad adicional con Windows para localizar Tesseract si está instalado en la ruta estándar.
-- Shim de compatibilidad para NumPy 2.x, necesario porque algunas versiones de PaddlePaddle todavía dependen de `np.sctypes`.
+---
 
-## Arquitectura general
+## Tabla de contenidos
+- [Características](#características)
+- [Arquitectura](#arquitectura)
+- [Instalación](#instalación)
+- [Uso](#uso)
+- [Precisión](#precisión)
+- [Cambios respecto a v2](#resumen-de-cambios-respecto-a-v2)
 
-El módulo está dividido en capas internas.
+---
 
-| Componente | Responsabilidad |
-|---|---|
-| `Preprocessor` | Corrige orientación, detecta región de tarjeta, ajusta perspectiva, escala imagen, mejora contraste y genera variantes procesadas. |
-| `INEZoneExtractor` | Recorta zonas específicas del frente y reverso, como nombre, domicilio, datos, fechas, inferior, MRZ y datos extra. |
-| `OCREngine` | Ejecuta PaddleOCR y Tesseract, combina resultados, filtra duplicados, maneja OCR por zonas y aplica early exit. |
-| `FieldExtractor` | Convierte texto OCR en campos estructurados como nombre, CURP, domicilio, vigencia, sección, MRZ, CIC y OCR vertical. |
-| `Validator` | Valida CURP, compara frente y reverso, calcula porcentaje de match y puede corregir nombre usando MRZ como referencia. |
-| Data models | Usa `dataclasses` como `FrontData`, `BackData`, `MRZData`, `NameData`, `AddressData`, `OCRResult` y `MatchResult`. |
+## Características
 
-## Requisitos
+- **Frente:** nombre, apellidos, CURP, clave de elector, fecha de nacimiento, sexo,
+  domicilio (calle, colonia, CP, municipio, estado), sección, vigencia, año de registro,
+  tipo y modelo de INE (C/D/E/F/G/H).
+- **Reverso:** MRZ (3 líneas), apellidos/nombres, número de documento, fecha de nacimiento,
+  sexo, fecha de expiración, CURP, CIC.
+- **Validación cruzada** frente↔reverso (cuando se tienen ambas caras).
+- **Correcciones inteligentes** que explotan la redundancia del documento:
+  - Dígito verificador de CURP (solo devuelve CURPs válidos).
+  - Votación de fecha de nacimiento contra el CURP.
+  - Reordenamiento de apellidos/nombre usando las iniciales del CURP.
+  - Limpieza de contaminación de zonas vecinas en el nombre.
+- **MRZ por Tesseract** (rápido y robusto sobre la fuente OCR-B del reverso).
+- 100% local (los datos no salen del equipo).
 
-Este módulo usa Python y depende de librerías de visión por computadora y OCR.
+## Arquitectura
+
+Paquete modular `ocr_ine/`:
+
+```
+ocr_ine/
+├── __init__.py        API pública (importa config primero)
+├── __main__.py        CLI: python -m ocr_ine <img> [tipo]
+├── config.py          Entorno: CUDA off, ruta Tesseract
+├── models.py          Dataclasses (Detection, FrontData, MRZData, ...)
+├── paddle_loader.py   Carga perezosa de PaddleOCR (PP-OCRv5)
+├── preprocessor.py    Preprocesamiento de imagen
+├── zone_extractor.py  Extracción de zonas (fallback)
+├── ocr_engine.py      Motor OCR (PaddleOCR 3.x + Tesseract)
+├── field_extractor.py Extracción/validación de campos
+├── validator.py       Validación cruzada frente/reverso
+├── factory.py         Singletons de los motores
+├── api.py             Funciones públicas
+└── legacy.py          Compatibilidad con scripts antiguos
+```
+
+**Estrategia de OCR (v3.0):** con PP-OCRv5 se hace **una sola pasada de OCR sobre la imagen
+completa** (más preciso y más rápido que recortar por zonas). El enfoque por zonas queda
+como *fallback* automático si la pasada principal no recupera los campos críticos.
+
+## Instalación
+
+Requiere Python 3.11 y el binario de **Tesseract OCR** instalado en el sistema
+(Windows: <https://github.com/UB-Mannheim/tesseract/wiki>; se usa para el MRZ del reverso).
 
 ```bash
-pip install opencv-python numpy pillow pytesseract paddleocr paddlepaddle
+python -m venv venv
+# Windows
+venv\Scripts\pip install -r requirements.txt
+# Linux/Mac
+venv/bin/pip install -r requirements.txt
 ```
 
-## Configuración de CPU
-
-```python
-os.environ['CUDA_VISIBLE_DEVICES'] = ''
-os.environ['FLAGS_use_cuda'] = '0'
-os.environ['FLAGS_use_gpu'] = '0'
-os.environ['PADDLEOCR_USE_GPU'] = '0'
+`requirements.txt`:
+```
+paddleocr==3.6.0
+paddlepaddle==3.0.0
+numpy>=2.0
+opencv-python-headless
+pytesseract==0.3.13
+Pillow
 ```
 
-## Uso rápido
+> PaddlePaddle 3.x soporta NumPy 2.x de forma nativa: ya **no** se necesitan los parches
+> de `protobuf`/`np.sctypes` que requería la v2 (PaddleOCR 2.8 / paddlepaddle 2.6).
 
-### Extraer datos del frente
+## Uso
 
-```python
-import cv2
-from ocr_avanzado_v2 import extraer_datos_ine_frente
-
-img = cv2.imread("ine_frente.jpg")
-datos = extraer_datos_ine_frente(img)
-
-print(datos["nombre"])
-print(datos["curp"])
-print(datos["vigencia"])
-```
-
-### Extraer datos del reverso
+### Python
 
 ```python
 import cv2
-from ocr_avanzado_v2 import extraer_datos_ine_reverso
+from ocr_ine import extraer_datos_ine_frente, extraer_datos_ine_reverso
 
-img = cv2.imread("ine_reverso.jpg")
-datos = extraer_datos_ine_reverso(img)
+datos = extraer_datos_ine_frente(cv2.imread("ine_frente.jpeg"))
+print(datos["nombre"]["nombre_completo"], datos["curp"])
 
-print(datos["mrz"])
-print(datos["cic"])
-print(datos["ocr_vertical"])
+mrz = extraer_datos_ine_reverso(cv2.imread("ine_reverso.jpeg"))
+print(mrz["mrz"]["nombre_completo"], mrz["mrz"]["numero_documento"])
 ```
 
-### Detección automática de tipo de imagen
+### Validación cruzada (ambas caras)
 
 ```python
-import cv2
-from ocr_avanzado_v2 import extraer_datos_ine
-
-img = cv2.imread("ine.jpg")
-datos = extraer_datos_ine(img, tipo="auto")
-
-print(datos["tipo"])
+from ocr_ine import validar_cruzado_ine
+res = validar_cruzado_ine(img_frente, img_reverso)
 ```
 
-### Validación cruzada frente y reverso
+### CLI
 
-```python
-import cv2
-from ocr_avanzado_v2 import validar_cruzado_ine
-
-frente = cv2.imread("ine_frente.jpg")
-reverso = cv2.imread("ine_reverso.jpg")
-
-resultado = validar_cruzado_ine(frente, reverso)
-
-print(resultado["validacion"])
-print(resultado["nombre_corregido"])
+```bash
+python -m ocr_ine ruta/a/ine.jpeg auto    # tipo: frente | reverso | auto
 ```
 
-## Campos extraídos
+## Precisión
 
-### Frente
+Medida sobre 50 imágenes de frente con *ground truth* etiquetado manualmente.
 
-La función `extraer_datos_ine_frente` devuelve un diccionario con esta estructura general:
+| Campo               | v2     | **v3.0 (PP-OCRv5)** |
+|---------------------|:------:|:-------------------:|
+| Apellido paterno    | 88%    | **94%** |
+| Apellido materno    | 80%    | **88%** |
+| Nombre(s)           | 44%    | **78%** |
+| CURP                | 92%    | **92%** \* |
+| Fecha de nacimiento | 84%    | **98%** |
+| Sección             | 40%    | **96%** |
+| Vigencia            | 84%    | **100%** |
+| Código postal       | 32%    | **96%** |
+| Clave de elector    | 4%     | **26%** |
+| **Promedio**        | **61%**| **85%** |
 
-| Campo | Descripción |
-|---|---|
-| `tipo` | Tipo de documento procesado, normalmente `INE_FRENTE`. |
-| `nombre` | Objeto con `apellido_paterno`, `apellido_materno`, `nombre` y `nombre_completo`. |
-| `nombre_raw_ocr` | Nombre leído directamente por OCR antes de correcciones adicionales. |
-| `domicilio` | Objeto con calle, número exterior, número interior, colonia, código postal, municipio, estado y domicilio completo. |
-| `sexo` | Sexo detectado en la credencial. |
-| `curp` | CURP extraída y corregida cuando es posible. |
-| `clave_elector` | Clave de elector detectada. |
-| `fecha_nacimiento` | Fecha de nacimiento normalizada cuando se puede interpretar. |
-| `anio_registro` | Año de registro. |
-| `anio_emision` | Año de emisión. |
-| `tipo_ine` | Identificación general como `IFE` o `INE`. |
-| `modelo_ine` | Modelo específico de credencial, como C, D, E, F, G o H. |
-| `seccion` | Sección electoral. |
-| `vigencia` | Vigencia detectada. |
-| `texto_crudo` | Texto OCR completo o combinado. |
-| `confianza_ocr` | Confianza estimada del resultado. |
+\* La CURP extraída pasa el dígito verificador en el **100%** de los casos (es decir, es
+correcta); el ground truth manual tiene ruido en cadenas largas, por lo que el valor real
+es ≥92%.
 
-### Reverso
+Reverso (MRZ): número de documento ~92%, fecha ~92%, sexo ~95%, apellidos ~88%,
+nombres ~82%. El campo `nombres` está limitado por el truncamiento físico del MRZ.
 
-La función `extraer_datos_ine_reverso` devuelve un diccionario con esta estructura general:
+## Comparación de versiones (OG → v2 → v3)
 
-| Campo | Descripción |
-|---|---|
-| `tipo` | Tipo de documento procesado, normalmente `INE_REVERSO`. |
-| `mrz.lineas_raw` | Líneas MRZ tal como fueron leídas por OCR. |
-| `mrz.lineas_clean` | MRZ limpio y validado desde `IDMEX` cuando se logra reconstruir. |
-| `mrz.documento_tipo` | Tipo de documento detectado en MRZ. |
-| `mrz.pais` | País detectado, normalmente `MEX`. |
-| `mrz.numero_documento` | Número de documento del MRZ. |
-| `mrz.nombre_completo` | Nombre completo reconstruido desde MRZ. |
-| `mrz.apellido_paterno` | Apellido paterno desde MRZ. |
-| `mrz.apellido_materno` | Apellido materno desde MRZ. |
-| `mrz.nombres` | Nombres desde MRZ. |
-| `mrz.fecha_nacimiento` | Fecha de nacimiento desde MRZ. |
-| `mrz.sexo` | Sexo desde MRZ. |
-| `mrz.fecha_expiracion` | Fecha de expiración desde MRZ. |
-| `curp` | CURP extraída del reverso si aparece. |
-| `cic` | Código de Identificación de Credencial. |
-| `ocr_vertical` | Identificador ciudadano vertical. |
-| `texto_crudo` | Texto OCR completo o combinado. |
-| `confianza_ocr` | Confianza estimada del resultado. |
-
-## Flujo de procesamiento en v2
-
-Para el frente, v2 intenta primero una ruta rápida por zonas. Procesa zonas como `nombre`, `datos`, `domicilio`, `fechas` e `inferior`. Si encuentra nombre y al menos un identificador crítico, como CURP o clave de elector, se queda con ese resultado. Si no, cae al OCR completo y reutiliza zonas ya calculadas para no repetir trabajo innecesario.
-
-Para el reverso, v2 intenta primero OCR por zonas y prioriza el MRZ. Si el MRZ produce nombre completo o número de documento, devuelve directamente el resultado. Si no hay MRZ suficiente, ejecuta OCR completo como fallback.
-
-La zona MRZ tiene una ruta especial. Primero intenta Tesseract con whitelist `A-Z0-9<`, después intenta Tesseract con CLAHE y solo si eso falla usa PaddleOCR. Esta decisión reduce bastante el tiempo de reverso, porque evita usar PaddleOCR sobre líneas MRZ anchas cuando Tesseract puede resolverlas rápido.
-
-## Validación cruzada
-
-`validar_cruzado_ine(img_frente, img_reverso)` compara CURP, fecha de nacimiento, sexo y nombre entre frente y reverso. El validador asigna pesos internos a los campos y devuelve un porcentaje de match, un resultado general y una bandera para saber si puede aprobarse automáticamente.
-
-| Campo validado | Peso interno |
-|---|---:|
-| CURP | 40% |
-| Fecha de nacimiento | 25% |
-| Sexo | 15% |
-| Nombre | 20% |
-
-La función también intenta corregir el nombre usando MRZ como referencia cuando hay coincidencias fuertes en campos más confiables, como CURP, fecha o sexo.
-
-## Cambios del OG al v2
-
-| Área | OG | v2 |
-|---|---|---|
-| Estrategia del frente | Ejecuta OCR completo en `fast_mode` primero y después usa zonas si hay buena confianza. | Ejecuta OCR por zonas primero y solo cae a OCR completo si faltan campos críticos. |
-| Estrategia del reverso | Ejecuta zonas para MRZ, pero también corre OCR completo en la ruta principal. | Devuelve el resultado desde zonas si el MRZ ya tiene nombre completo o número de documento. OCR completo queda como fallback. |
-| MRZ | Usa PaddleOCR como ruta principal para la zona MRZ, con CLAHE si el primer intento falla. | Usa Tesseract con whitelist primero, luego CLAHE + Tesseract, y después PaddleOCR solo como fallback. |
-| Validación MRZ | Requiere al menos 18 caracteres `<` y longitud mínima de 100. | Baja el mínimo a 10 caracteres `<` y longitud mínima de 85 para aceptar MRZ más cortos leídos por Tesseract. |
-| Tamaño mínimo de escalado | `MIN_SIZE = 1200`. | `MIN_SIZE = 900`, reduciendo upscaling y tiempo de reconocimiento. |
-| Compatibilidad NumPy 2.x | No incluye shim para `np.sctypes`. | Añade shim para `np.sctypes` cuando no existe, mejorando compatibilidad con PaddlePaddle. |
-| Compatibilidad Windows | No configura ruta local de Tesseract. | Intenta usar `C:\Program Files\Tesseract-OCR\tesseract.exe` si Tesseract no está en `PATH`. |
-| Reutilización de zonas | Puede recalcular zonas en fallback. | Guarda y reutiliza zonas del primer intento para ahorrar tiempo. |
-| Corrección de apellidos | No aplica swap con CURP como ancla al final del frente. | Compara iniciales de CURP con apellido paterno y materno, y hace swap si detecta orden invertido. |
-| Patrón de nombre MRZ | Permite capturas más amplias en componentes del nombre. | Limita componentes a rangos de longitud para evitar capturar texto externo al MRZ. |
-| Objetivo principal | Mayor contexto textual y mejor precisión promedio. | Mejor velocidad en procesamiento por lotes, aceptando pérdida de precisión en algunos campos. |
-
-## Resultado (En dispositivo no optimizado)
+Mismas 50 imágenes de frente y 50 de reverso, *ground truth* etiquetado manualmente,
+en un dispositivo **no optimizado** (CPU, modelo en caliente).
 
 ### Velocidad
 
-| Métrica | OG | v2 | Ganancia |
-|---|---:|---:|---:|
-| Frente avg | 11.7s | 7.4s | 1.6x |
-| Reverso avg | 7.7s | 3.8s | 2.0x |
-| 100 imgs total | 16.1 min | 9.3 min | 1.7x más rápido |
+| Métrica          |     OG |     v2 | **v3 (PP-OCRv5)** |
+|------------------|-------:|-------:|------------------:|
+| Frente avg       | 11.7 s |  7.4 s |          **~8 s** |
+| Reverso avg      |  7.7 s |  3.8 s |         **4.3 s** |
+| 100 imgs (total) | 16.1 m |  9.3 m |        **10.8 m** |
 
-### Precisión frente
+### Precisión: Frente
 
-| Campo | OG | v2 |
-|---|---:|---:|
-| `apellido_paterno` | 94% | 88% |
-| `apellido_materno` | 86% | 80% |
-| `nombre(s)` | 66% | 44% |
-| `curp` | 92% | 92% empate |
-| `clave_elector` | 2% | 4% casi nada |
-| `fecha_nacimiento` | 96% | 84% |
-| `vigencia` | 100% | 84% |
-| `sección` | 50% | 40% |
-| `CP` | 54% | 32% |
+| Campo               |   OG |   v2 | **v3** |
+|---------------------|-----:|-----:|-------:|
+| Apellido paterno    |  94% |  88% |**94%** |
+| Apellido materno    |  86% |  80% |**88%** |
+| Nombre(s)           |  66% |  44% |**78%** |
+| CURP                |  92% |  92% |**92%** |
+| Clave de elector    |   2% |   4% |**26%** |
+| Fecha de nacimiento |  96% |  84% |**98%** |
+| Sección             |  50% |  40% |**96%** |
+| Vigencia            | 100% |  84% |**100%**|
+| Código postal       |  54% |  32% |**96%** |
+| **Promedio**        | ~71% | ~61% |**85%** |
 
-### Precisión reverso MRZ
+### Precisión: Reverso (MRZ)
 
-| Campo | OG | v2 |
-|---|---:|---:|
-| `apellidos` | 96% | 88% |
-| `nombres MRZ` | 86% | 58% |
-| `num. documento` | 94% | 92% |
-| `fecha nacimiento` | 98% | 92% |
-| `sexo` | 100% | 95% |
+| Campo            |   OG |  v2 | **v3** |
+|------------------|-----:|----:|-------:|
+| Apellidos        |  96% | 88% |**88%** |
+| Nombres MRZ      |  86% | 58% |**82%** |
+| Número documento |  94% | 92% |**92%** |
+| Fecha nacimiento |  98% | 92% |**92%** |
+| Sexo             | 100% | 95% |**95%** |
+
+**Lectura:** la **v2** sacrificó precisión por velocidad frente a la OG. La **v3** recupera
+y supera a la OG en el frente, con grandes saltos en los campos antes débiles
+(sección 50→96, CP 54→96, clave 2→26, nombre 66→78), y mantiene el reverso competitivo
+y rápido, todo a una velocidad similar a la v2. Es decir: **la precisión de la OG y la
+velocidad de la v2, simultáneamente.**
+
+## Evolución de decisiones de diseño (OG → v2 → v3)
+
+| Área | OG | v2 | v3 (PP-OCRv5) |
+|---|---|---|---|
+| Motor OCR | PaddleOCR 2.8 (PP-OCRv3 latino). | PaddleOCR 2.8 (PP-OCRv3 latino). | **PaddleOCR 3.6 (PP-OCRv5 latino)**, mucho mejor en nombres en español. |
+| Estrategia del frente | Ejecuta OCR completo en `fast_mode` primero y después usa zonas si hay buena confianza. | Ejecuta OCR por zonas primero y solo cae a OCR completo si faltan campos críticos. | **Una sola pasada de OCR de imagen completa** (con v5 supera a las zonas en precisión y velocidad); las zonas quedan como fallback. |
+| Estrategia del reverso | Ejecuta zonas para MRZ, pero también corre OCR completo en la ruta principal. | Devuelve el resultado desde zonas si el MRZ ya tiene nombre completo o número de documento. OCR completo queda como fallback. | Igual que v2, y además **salta la zona `datos_extra`** (PaddleOCR ~3 s) cuando el MRZ ya se resolvió por Tesseract. |
+| MRZ | Usa PaddleOCR como ruta principal para la zona MRZ, con CLAHE si el primer intento falla. | Usa Tesseract con whitelist primero, luego CLAHE + Tesseract, y después PaddleOCR solo como fallback. | Igual que v2 (Tesseract primero; la fuente OCR-B se binariza óptimo con Otsu). |
+| Validación MRZ | Requiere al menos 18 caracteres `<` y longitud mínima de 100. | Baja el mínimo a 10 caracteres `<` y longitud mínima de 85 para aceptar MRZ más cortos leídos por Tesseract. | Igual que v2 (10 caracteres `<`, longitud mínima 85). |
+| Tamaño mínimo de escalado | `MIN_SIZE = 1200`. | `MIN_SIZE = 900`, reduciendo upscaling y tiempo de reconocimiento. | `MIN_SIZE = 900`. |
+| Compatibilidad NumPy | No incluye shim para `np.sctypes`. | Añade shim para `np.sctypes` (PaddlePaddle 2.x lo requiere). | **Sin shim**: PaddlePaddle 3.x soporta NumPy 2.x de forma nativa. |
+| Compatibilidad Windows | No configura ruta local de Tesseract. | Intenta usar `C:\Program Files\Tesseract-OCR\tesseract.exe` si Tesseract no está en `PATH`. | Igual que v2. |
+| Reutilización de zonas | Puede recalcular zonas en fallback. | Guarda y reutiliza zonas del primer intento para ahorrar tiempo. | Las zonas solo corren como fallback, así que rara vez se recalculan. |
+| Corrección de apellidos/nombre | No aplica swap con CURP como ancla. | Compara iniciales de CURP con apellido paterno y materno, y hace swap si detecta orden invertido. | Swap por CURP **más** corte de contaminación del nombre, desplazamiento si la etiqueta "NOMBRE" se cuela como apellido, y votación de fecha contra el CURP. |
+| Patrón de nombre MRZ | Permite capturas más amplias en componentes del nombre. | Limita componentes a rangos de longitud para evitar capturar texto externo al MRZ. | Igual que v2. |
+| Sección / CP | Extracción frágil (anclas débiles, `\b` que falla con texto pegado). | Igual que OG. | **Anclaje posicional** para sección y patrón sin `\b` + fallback para CP. |
+| Objetivo principal | Mayor contexto textual y mejor precisión promedio. | Mejor velocidad en procesamiento por lotes, aceptando pérdida de precisión. | **Precisión de la OG y velocidad de la v2 a la vez** (PP-OCRv5 + parsers corregidos). |
+
+## Resumen de cambios respecto a v2
+
+- **Motor:** PaddleOCR 2.8 (PP-OCRv3 latino) → **PaddleOCR 3.6 (PP-OCRv5 latino)**.
+- **Estrategia:** de 5 pasadas por zona → **1 pasada de imagen completa** (+precisión, +velocidad).
+- **Entorno:** NumPy 2.x nativo; se eliminaron los shims de `protobuf 3.20.2` y `np.sctypes`.
+- **Parsers corregidos** (bugs reales encontrados con diagnóstico contra ground truth):
+  - Clave de elector y CP: el patrón usaba `\b` que fallaba cuando el OCR pega el valor a
+    la etiqueta (`CLAVEDEELECTORORPCRC...`, `HACIENDA54715`).
+  - Sección: anclaje posicional fecha → sección → vigencia.
+  - Nombre: corte de contaminación de zonas vecinas y de la etiqueta "NOMBRE" mal leída.
+- **Reverso:** MRZ con Tesseract primero (la fuente OCR-B se binariza óptimo con Otsu);
+  PaddleOCR solo como fallback.
+- Estructura modular (paquete `ocr_ine`) en lugar de un único archivo de ~7000 líneas.
